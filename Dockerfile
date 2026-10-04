@@ -45,7 +45,8 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN python3 -m pip install --upgrade pip \
-  && python3 -m pip install -r requirements.txt
+  && python3 -m pip install wheel setuptools 'Cython<3' \
+  && python3 -m pip install --no-build-isolation -r requirements.txt
 
 COPY asr_server ./asr_server
 COPY entrypoint.sh /entrypoint.sh
