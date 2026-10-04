@@ -15,6 +15,14 @@ on:
         options:
           - "true"
           - "false"
+      export_code_artifact:
+        description: Export mountable app code tar.gz artifact
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 permissions:
   contents: read
@@ -45,6 +53,7 @@ jobs:
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER}/local-asr-server:${{ inputs.tag }}"
           echo "image=${IMAGE,,}" >> "$GITHUB_OUTPUT"
           echo "artifact_name=local-asr-server-${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          echo "code_artifact_name=local-asr-server-code-${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -64,12 +73,39 @@ jobs:
           docker image inspect "${{ steps.image.outputs.image }}" \
             --format '{{ index .Config.Labels "ai.lgithubl.ctranslate2.version" }}' \
             | grep -qx "3.24.0"
+          docker image inspect "${{ steps.image.outputs.image }}" \
+            --format '{{ index .Config.Labels "ai.lgithubl.code_mount" }}' \
+            | grep -qx "/workspace/local-asr-server"
           docker run --rm --entrypoint python3 "${{ steps.image.outputs.image }}" - <<'PY'
           import importlib.metadata
           assert importlib.metadata.version("ctranslate2") == "3.24.0"
           assert importlib.metadata.version("faster-whisper") == "0.10.1"
           print("ctranslate2", importlib.metadata.version("ctranslate2"))
           PY
+
+      - name: Smoke test external code mount
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/asr-inputs" "$RUNNER_TEMP/asr-outputs"
+          docker run -d --name local-asr-code-mount-smoke \
+            -p 19000:9000 \
+            -v "$PWD:/workspace/local-asr-server:ro" \
+            -v "$RUNNER_TEMP/asr-inputs:/inputs:ro" \
+            -v "$RUNNER_TEMP/asr-outputs:/outputs" \
+            -e ASR_BACKEND=mock \
+            -e ASR_REQUIRE_EXTERNAL_CODE=1 \
+            "${{ steps.image.outputs.image }}"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:19000/health | tee "$RUNNER_TEMP/asr-code-mount-health.json" | grep -q '"ok":true'; then
+              docker logs local-asr-code-mount-smoke | grep -q 'Using external ASR code from: /workspace/local-asr-server'
+              exit 0
+            fi
+            docker logs --tail 80 local-asr-code-mount-smoke || true
+            sleep 1
+          done
+          docker logs local-asr-code-mount-smoke || true
+          exit 1
 
       - name: Write image summary
         shell: bash
@@ -106,6 +142,26 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Export mountable code artifact
+        if: inputs.export_code_artifact == 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/${{ steps.image.outputs.code_artifact_name }}"
+          cp -R asr_server "$RUNNER_TEMP/${{ steps.image.outputs.code_artifact_name }}/asr_server"
+          cp entrypoint.sh requirements.txt README.md "$RUNNER_TEMP/${{ steps.image.outputs.code_artifact_name }}/"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/${{ steps.image.outputs.code_artifact_name }}/VERSION"
+          tar -C "$RUNNER_TEMP" -czf "${{ steps.image.outputs.code_artifact_name }}.tar.gz" "${{ steps.image.outputs.code_artifact_name }}"
+
+      - name: Upload mountable code artifact
+        if: inputs.export_code_artifact == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.image.outputs.code_artifact_name }}
+          path: ${{ steps.image.outputs.code_artifact_name }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Write local image artifact summary
         if: inputs.export_artifact == 'true'
         shell: bash
@@ -115,10 +171,14 @@ jobs:
 
           Download the artifact named \`${{ steps.image.outputs.artifact_name }}\` from this workflow run.
 
+          Optional code override artifact: \`${{ steps.image.outputs.code_artifact_name }}\`.
+
           Load it locally with:
 
           \`\`\`bash
           gzip -dc ${{ steps.image.outputs.artifact_name }}.tar.gz | docker load
           docker image inspect ${{ steps.image.outputs.image }}
           \`\`\`
+
+          To update only app logic later, download \`${{ steps.image.outputs.code_artifact_name }}\`, unpack it, and mount the unpacked directory at `/workspace/local-asr-server:ro`.
           EOF

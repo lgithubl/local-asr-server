@@ -7,7 +7,8 @@ ARG CUDA_VERSION
 
 LABEL ai.lgithubl.cuda.version="${CUDA_VERSION}" \
       ai.lgithubl.ctranslate2.version="3.24.0" \
-      ai.lgithubl.m40.expected_compute_capability="5.2"
+      ai.lgithubl.m40.expected_compute_capability="5.2" \
+      ai.lgithubl.code_mount="/workspace/local-asr-server"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -18,6 +19,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ASR_MODEL_PATH=/models \
     ASR_INPUT_DIR=/inputs \
     ASR_OUTPUT_DIR=/outputs \
+    ASR_APP_DIR=/app \
+    ASR_EXTERNAL_APP_DIR=/workspace/local-asr-server \
+    ASR_REQUIRE_EXTERNAL_CODE=0 \
     ASR_DEVICE=cuda \
     ASR_COMPUTE_TYPE=float32 \
     ASR_DEFAULT_LANGUAGE=ja \

@@ -4,6 +4,8 @@ HTTP subtitle generation service for local audio files. It exposes a small API o
 
 The image does not include models. Mount a CTranslate2/faster-whisper model directory into `/models` and choose it with environment variables. Switching models is done by changing env vars and restarting the container.
 
+The image includes a bundled copy of the app code so it can run standalone. For later code-only fixes, unpack the code artifact from Actions and mount it at `/workspace/local-asr-server:ro`; the container will use the mounted code before the bundled copy.
+
 ## API
 
 ```bash
@@ -67,6 +69,29 @@ docker run -d \
   -e ASR_DEVICE=cuda \
   -e ASR_COMPUTE_TYPE=float32 \
   -e ASR_DEFAULT_LANGUAGE=ja \
+  -e ASR_IDLE_UNLOAD_SECONDS=300 \
+  ghcr.io/lgithubl/local-asr-server:m40
+```
+
+Run with external code mounted:
+
+```bash
+docker run -d \
+  --name local-asr-ja \
+  --restart unless-stopped \
+  --gpus all \
+  -p 9001:9000 \
+  -v /data/asr-inputs:/inputs:ro \
+  -v /data/asr-outputs:/outputs \
+  -v /data/asr-models/asr-model-ja-large-v3:/models:ro \
+  -v /data/local-asr-server-code/local-asr-server-code-m40:/workspace/local-asr-server:ro \
+  -e ASR_REQUIRE_EXTERNAL_CODE=1 \
+  -e ASR_MODEL_PATH=/models \
+  -e ASR_DEVICE=cuda \
+  -e ASR_COMPUTE_TYPE=float32 \
+  -e ASR_DEFAULT_LANGUAGE=ja \
+  -e ASR_VAD_FILTER=0 \
+  -e ASR_IDLE_UNLOAD_SECONDS=300 \
   ghcr.io/lgithubl/local-asr-server:m40
 ```
 
@@ -75,6 +100,9 @@ docker run -d \
 - `ASR_MODEL_PATH`: model directory, default `/models`
 - `ASR_INPUT_DIR`: read-only audio root, default `/inputs`
 - `ASR_OUTPUT_DIR`: subtitle output root, default `/outputs`
+- `ASR_APP_DIR`: bundled app directory, default `/app`
+- `ASR_EXTERNAL_APP_DIR`: optional external app-code mount, default `/workspace/local-asr-server`
+- `ASR_REQUIRE_EXTERNAL_CODE`: default `0`. Set `1` to fail startup unless external code is mounted.
 - `ASR_DEVICE`: `cuda` or `cpu`, default `cuda`
 - `ASR_COMPUTE_TYPE`: default `float32`, safest for Tesla M40. Use `int8` only on GPUs/backends that support it.
 - `ASR_DEFAULT_LANGUAGE`: default `ja`; use `zh` or `en` for other instances
@@ -93,6 +121,29 @@ docker run -d \
 - English: Whisper `large-v3` / `large-v3-turbo`
 
 For stable production routing, run one container per model/language and route externally.
+
+## Image and code artifacts from Actions
+
+Run **Build Image** from GitHub Actions. It uploads these artifacts by default:
+
+- `local-asr-server-m40`: Docker image tarball, load with `gzip -dc local-asr-server-m40.tar.gz | docker load`
+- `local-asr-server-code-m40`: mountable app code tarball for code-only updates
+
+Unpack the code artifact like this:
+
+```bash
+mkdir -p /data/local-asr-server-code
+tar -C /data/local-asr-server-code -xzf local-asr-server-code-m40.tar.gz
+```
+
+Then add this mount to the Docker or k3s spec:
+
+```bash
+-v /data/local-asr-server-code/local-asr-server-code-m40:/workspace/local-asr-server:ro \
+-e ASR_REQUIRE_EXTERNAL_CODE=1
+```
+
+If you do not mount external code, the container uses the code bundled in the image.
 
 ## Model artifacts from Actions
 

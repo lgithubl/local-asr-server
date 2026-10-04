@@ -55,6 +55,14 @@ on:
         description: ASR_IDLE_UNLOAD_SECONDS for the test server. 0 disables.
         required: false
         default: "0"
+      code_artifact:
+        description: Optional mountable code artifact name from Build Image, e.g. local-asr-server-code-m40
+        required: false
+        default: ""
+      code_run_id:
+        description: Optional Build Image run id for code artifact. Empty reuses image_run_id/latest Build Image.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -200,6 +208,52 @@ jobs:
           test -f "$RUNNER_TEMP/asr-asmr-vad/preprocessor_config.json"
           du -sh "$RUNNER_TEMP/asr-asmr-vad"
 
+      - name: Resolve code artifact run
+        if: ${{ inputs.code_artifact != '' }}
+        id: code-run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          RUN_ID="${{ inputs.code_run_id }}"
+          if [ -z "$RUN_ID" ] && [ "${{ inputs.image_source }}" = "artifact" ]; then
+            RUN_ID="${{ steps.image-run.outputs.run_id }}"
+          fi
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID="$(gh run list \
+              --repo "${{ github.repository }}" \
+              --workflow "Build Image" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')"
+          fi
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful Build Image run found for code artifact." >&2
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download code artifact
+        if: ${{ inputs.code_artifact != '' }}
+        id: code-dir
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/asr-code-artifact" "$RUNNER_TEMP/asr-code"
+          gh run download "${{ steps.code-run.outputs.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name "${{ inputs.code_artifact }}" \
+            --dir "$RUNNER_TEMP/asr-code-artifact"
+          find "$RUNNER_TEMP/asr-code-artifact" -type f -name '*.tar.gz' -print -quit \
+            | xargs -r -I{} tar -C "$RUNNER_TEMP/asr-code" -xzf {}
+          CODE_DIR="$(find "$RUNNER_TEMP/asr-code" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -f "$CODE_DIR/asr_server/main.py"
+          echo "path=$CODE_DIR" >> "$GITHUB_OUTPUT"
+          du -sh "$CODE_DIR"
+
       - name: Prepare volumes
         shell: bash
         run: |
@@ -226,12 +280,20 @@ jobs:
       - name: Start ASR server
         shell: bash
         run: |
+          CODE_MOUNT_ARGS=()
+          if [ -n "${{ inputs.code_artifact }}" ]; then
+            CODE_MOUNT_ARGS=(
+              -v "${{ steps.code-dir.outputs.path }}:/workspace/local-asr-server:ro"
+              -e ASR_REQUIRE_EXTERNAL_CODE=1
+            )
+          fi
           docker run -d --name local-asr-server \
             -p 9000:9000 \
             -v "$RUNNER_TEMP/asr-inputs:/inputs:ro" \
             -v "$RUNNER_TEMP/asr-outputs:/outputs" \
             -v "$RUNNER_TEMP/asr-models:/models:ro" \
             -v "$RUNNER_TEMP/asr-asmr-vad:/asmr-vad:ro" \
+            "${CODE_MOUNT_ARGS[@]}" \
             -e ASR_BACKEND="${{ inputs.backend }}" \
             -e ASR_MODEL_PATH=/models \
             -e ASR_DEVICE=cpu \
