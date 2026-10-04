@@ -39,6 +39,14 @@ on:
         description: Optional Build Model Pack run id. Empty means latest successful run.
         required: false
         default: ""
+      asmr_vad_artifact:
+        description: Optional ASMR VAD artifact name from Build ASMR VAD Pack
+        required: false
+        default: ""
+      asmr_vad_run_id:
+        description: Optional Build ASMR VAD Pack run id. Empty means latest successful run when artifact is set.
+        required: false
+        default: ""
       minutes:
         description: Minutes to keep endpoint alive
         required: false
@@ -149,10 +157,49 @@ jobs:
             | xargs -r -I{} tar -C "$RUNNER_TEMP/asr-models" -I zstd -xf {}
           du -sh "$RUNNER_TEMP/asr-models"
 
+      - name: Resolve ASMR VAD artifact run
+        if: ${{ inputs.asmr_vad_artifact != '' }}
+        id: asmr-vad-run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          RUN_ID="${{ inputs.asmr_vad_run_id }}"
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID="$(gh run list \
+              --repo "${{ github.repository }}" \
+              --workflow "Build ASMR VAD Pack" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')"
+          fi
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful Build ASMR VAD Pack run found." >&2
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download ASMR VAD artifact
+        if: ${{ inputs.asmr_vad_artifact != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/asr-asmr-vad"
+          gh run download "${{ steps.asmr-vad-run.outputs.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name "${{ inputs.asmr_vad_artifact }}" \
+            --dir "$RUNNER_TEMP/asr-asmr-vad"
+          test -f "$RUNNER_TEMP/asr-asmr-vad/model.onnx"
+          test -f "$RUNNER_TEMP/asr-asmr-vad/model_metadata.json"
+          test -f "$RUNNER_TEMP/asr-asmr-vad/preprocessor_config.json"
+          du -sh "$RUNNER_TEMP/asr-asmr-vad"
+
       - name: Prepare volumes
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/asr-inputs" "$RUNNER_TEMP/asr-outputs" "$RUNNER_TEMP/asr-models"
+          mkdir -p "$RUNNER_TEMP/asr-inputs" "$RUNNER_TEMP/asr-outputs" "$RUNNER_TEMP/asr-models" "$RUNNER_TEMP/asr-asmr-vad"
           python3 - <<'PY'
           import math
           import os
@@ -180,11 +227,15 @@ jobs:
             -v "$RUNNER_TEMP/asr-inputs:/inputs:ro" \
             -v "$RUNNER_TEMP/asr-outputs:/outputs" \
             -v "$RUNNER_TEMP/asr-models:/models:ro" \
+            -v "$RUNNER_TEMP/asr-asmr-vad:/asmr-vad:ro" \
             -e ASR_BACKEND="${{ inputs.backend }}" \
             -e ASR_MODEL_PATH=/models \
             -e ASR_DEVICE=cpu \
             -e ASR_COMPUTE_TYPE=int8 \
             -e ASR_DEFAULT_LANGUAGE=ja \
+            -e ASR_ASMR_VAD_MODEL_PATH=/asmr-vad/model.onnx \
+            -e ASR_ASMR_VAD_METADATA_PATH=/asmr-vad/model_metadata.json \
+            -e ASR_ASMR_VAD_FEATURE_EXTRACTOR_PATH=/asmr-vad \
             "${{ inputs.image }}"
 
       - name: Wait for server
@@ -200,15 +251,48 @@ jobs:
           docker logs local-asr-server || true
           exit 1
 
-      - name: Smoke test subtitles
+      - name: Smoke test subtitles and queue
         shell: bash
         run: |
           curl -fsS -X POST http://127.0.0.1:9000/v1/subtitles \
             -H 'Content-Type: application/json' \
-            -d '{"input_path":"/inputs/sample.wav","language":"ja","output_format":"srt","uniq_key_name":"sample-ja.srt"}' \
+            -d '{"input_path":"/inputs/sample.wav","language":"ja","output_format":"srt","uniq_key_name":"sample-ja.srt","vad_filter":true}' \
             | tee "$RUNNER_TEMP/asr-response.json"
           test -s "$RUNNER_TEMP/asr-outputs/sample-ja.srt"
           test ! -e "$RUNNER_TEMP/asr-outputs/sample-ja.srt.tmp"
+          curl -fsS -X POST http://127.0.0.1:9000/v1/subtitles \
+            -H 'Content-Type: application/json' \
+            -d '{"input_path":"/inputs/sample.wav","language":"ja","output_format":"srt","uniq_key_name":"sample-ja-async.srt","vad_filter":false,"async":true}' \
+            | tee "$RUNNER_TEMP/asr-async-response.json" | grep -q '"accepted":true'
+          curl -fsS http://127.0.0.1:9000/v1/jobs | tee "$RUNNER_TEMP/asr-jobs.json"
+          for i in $(seq 1 60); do
+            if [ -s "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt" ]; then
+              break
+            fi
+            curl -fsS http://127.0.0.1:9000/v1/jobs | tee "$RUNNER_TEMP/asr-jobs.json"
+            sleep 1
+          done
+          test -s "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt"
+          test ! -e "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt.tmp"
+          curl -fsS http://127.0.0.1:9000/v1/jobs | tee "$RUNNER_TEMP/asr-jobs-final.json" | grep -q '"pending_count":0'
+
+      - name: Smoke test ASMR VAD segmenter
+        if: ${{ inputs.asmr_vad_artifact != '' && inputs.backend == 'faster-whisper' }}
+        shell: bash
+        run: |
+          curl -fsS -X POST http://127.0.0.1:9000/v1/subtitles \
+            -H 'Content-Type: application/json' \
+            -d '{"input_path":"/inputs/sample.wav","language":"ja","output_format":"srt","uniq_key_name":"sample-ja-asmr.srt","asmr_vad":true,"async":true}' \
+            | tee "$RUNNER_TEMP/asr-asmr-response.json" | grep -q '"accepted":true'
+          for i in $(seq 1 90); do
+            if [ -e "$RUNNER_TEMP/asr-outputs/sample-ja-asmr.srt" ] || [ -e "$RUNNER_TEMP/asr-outputs/sample-ja-asmr.srt.err.log" ]; then
+              exit 0
+            fi
+            curl -fsS http://127.0.0.1:9000/v1/jobs | tee "$RUNNER_TEMP/asr-jobs-asmr.json"
+            sleep 2
+          done
+          docker logs local-asr-server || true
+          exit 1
 
       - name: Start authenticated proxy
         id: auth
@@ -347,7 +431,15 @@ jobs:
           docker logs local-asr-server >/tmp/local-asr-server.log 2>&1 || true
           cp "$RUNNER_TEMP/asr-health.json" /tmp/asr-health.json 2>/dev/null || true
           cp "$RUNNER_TEMP/asr-response.json" /tmp/asr-response.json 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-async-response.json" /tmp/asr-async-response.json 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-asmr-response.json" /tmp/asr-asmr-response.json 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-jobs.json" /tmp/asr-jobs.json 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-jobs-final.json" /tmp/asr-jobs-final.json 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-jobs-asmr.json" /tmp/asr-jobs-asmr.json 2>/dev/null || true
           cp "$RUNNER_TEMP/asr-outputs/sample-ja.srt" /tmp/sample-ja.srt 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt" /tmp/sample-ja-async.srt 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-outputs/sample-ja-asmr.srt" /tmp/sample-ja-asmr.srt 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-outputs/sample-ja-asmr.srt.err.log" /tmp/sample-ja-asmr.srt.err.log 2>/dev/null || true
           cp /tmp/cloudflared.log /tmp/cloudflared.log.copy 2>/dev/null || true
           cp /tmp/basic_proxy.log /tmp/basic_proxy.log.copy 2>/dev/null || true
 
@@ -360,8 +452,16 @@ jobs:
             /tmp/local-asr-server.log
             /tmp/asr-health.json
             /tmp/asr-response.json
+            /tmp/asr-async-response.json
+            /tmp/asr-asmr-response.json
             /tmp/asr-tunnel-health.json
+            /tmp/asr-jobs.json
+            /tmp/asr-jobs-final.json
+            /tmp/asr-jobs-asmr.json
             /tmp/sample-ja.srt
+            /tmp/sample-ja-async.srt
+            /tmp/sample-ja-asmr.srt
+            /tmp/sample-ja-asmr.srt.err.log
             /tmp/local-asr-home.png
             /tmp/cloudflared.log.copy
             /tmp/basic_proxy.log.copy

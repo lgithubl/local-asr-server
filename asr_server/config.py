@@ -27,6 +27,17 @@ class Settings:
     beam_size: int = int(os.getenv("ASR_BEAM_SIZE", "5"))
     vad_filter: bool = _bool_env("ASR_VAD_FILTER", False)
     preload_model: bool = _bool_env("ASR_PRELOAD_MODEL", True)
+    max_queue_size: int = int(os.getenv("ASR_MAX_QUEUE_SIZE", "64"))
+    asmr_vad_model_path: str = os.getenv("ASR_ASMR_VAD_MODEL_PATH", "")
+    asmr_vad_metadata_path: str = os.getenv("ASR_ASMR_VAD_METADATA_PATH", "")
+    asmr_vad_feature_extractor_path: str = os.getenv("ASR_ASMR_VAD_FEATURE_EXTRACTOR_PATH", "")
+    asmr_vad_force_cpu: bool = _bool_env("ASR_ASMR_VAD_FORCE_CPU", True)
+    asmr_vad_threads: int = int(os.getenv("ASR_ASMR_VAD_THREADS", "1"))
+    asmr_vad_threshold: float = float(os.getenv("ASR_ASMR_VAD_THRESHOLD", "0.5"))
+    asmr_vad_min_speech_ms: int = int(os.getenv("ASR_ASMR_VAD_MIN_SPEECH_MS", "250"))
+    asmr_vad_min_silence_ms: int = int(os.getenv("ASR_ASMR_VAD_MIN_SILENCE_MS", "100"))
+    asmr_vad_speech_pad_ms: int = int(os.getenv("ASR_ASMR_VAD_SPEECH_PAD_MS", "300"))
+    asmr_vad_max_speech_s: float = float(os.getenv("ASR_ASMR_VAD_MAX_SPEECH_S", "30"))
 
 
 settings = Settings()

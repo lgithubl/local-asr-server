@@ -1,0 +1,87 @@
+name: Build ASMR VAD Pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: Name of the uploaded ASMR VAD artifact
+        required: true
+        default: asr-asmr-vad-onnx
+      model_id:
+        description: Hugging Face model id to download
+        required: true
+        default: TransWithAI/Whisper-Vad-EncDec-ASMR-onnx
+      revision:
+        description: Optional Hugging Face revision
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  build-asmr-vad-pack:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Install tools
+        run: |
+          python3 -m pip install --user --upgrade huggingface_hub transformers
+
+      - name: Download ASMR VAD model
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "${{ inputs.artifact_name }}"
+          python3 - <<'PY'
+          import shutil
+          from pathlib import Path
+
+          from huggingface_hub import snapshot_download
+          from transformers import WhisperFeatureExtractor
+
+          artifact = Path("${{ inputs.artifact_name }}")
+          snapshot = Path(snapshot_download(repo_id="${{ inputs.model_id }}", revision="${{ inputs.revision }}"))
+          for name in ["model.onnx", "model_metadata.json", "README.md", "inference.py", "requirements.txt"]:
+              source = snapshot / name
+              if source.exists():
+                  shutil.copy2(source, artifact / name)
+
+          WhisperFeatureExtractor.from_pretrained("openai/whisper-base").save_pretrained(artifact)
+          PY
+          test -f "${{ inputs.artifact_name }}/model.onnx"
+          test -f "${{ inputs.artifact_name }}/model_metadata.json"
+          test -f "${{ inputs.artifact_name }}/preprocessor_config.json"
+          cat > "${{ inputs.artifact_name }}/docker.env" <<EOF
+          ASR_ASMR_VAD_MODEL_PATH=/asmr-vad/model.onnx
+          ASR_ASMR_VAD_METADATA_PATH=/asmr-vad/model_metadata.json
+          ASR_ASMR_VAD_FEATURE_EXTRACTOR_PATH=/asmr-vad
+          ASR_ASMR_VAD_FORCE_CPU=1
+          EOF
+          find "${{ inputs.artifact_name }}" -maxdepth 1 -type f | sort
+          du -sh "${{ inputs.artifact_name }}"
+
+      - name: Upload ASMR VAD artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.artifact_name }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Write ASMR VAD summary
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## ASMR VAD artifact
+
+          Download artifact \`${{ inputs.artifact_name }}\` and mount it read-only:
+
+          \`\`\`bash
+          -v /data/asr-models/${{ inputs.artifact_name }}:/asmr-vad:ro \\
+          -e ASR_ASMR_VAD_MODEL_PATH=/asmr-vad/model.onnx \\
+          -e ASR_ASMR_VAD_METADATA_PATH=/asmr-vad/model_metadata.json \\
+          -e ASR_ASMR_VAD_FEATURE_EXTRACTOR_PATH=/asmr-vad
+          \`\`\`
+          EOF

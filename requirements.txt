@@ -3,3 +3,5 @@ uvicorn[standard]==0.34.0
 pydantic==2.10.4
 ctranslate2==3.24.0
 faster-whisper==0.10.1
+onnxruntime==1.19.2
+transformers==4.44.2

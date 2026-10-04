@@ -21,6 +21,37 @@ The server writes `/outputs/sample-ja.srt.tmp` first. After transcription and fs
 
 Supported output formats: `srt`, `vtt`, `json`, `txt`.
 
+Request options:
+
+- `vad_filter`: optional boolean. Overrides `ASR_VAD_FILTER` for one request.
+- `async` or `async_mode`: optional boolean. When true, the API returns after validation and the server continues writing the output file in the background. Completion is still detected by the final output file appearing.
+- `segmenter`: optional, `none` or `asmr-onnx`. When `asmr-onnx`, the server uses the mounted `Whisper-Vad-EncDec-ASMR-onnx` model to split speech before ASR.
+- `asmr_vad`: optional boolean shortcut. `true` means `segmenter=asmr-onnx`.
+
+Async example:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:9000/v1/subtitles \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input_path": "/inputs/sample.wav",
+    "language": "ja",
+    "output_format": "srt",
+    "uniq_key_name": "sample-ja.srt",
+    "vad_filter": true,
+    "segmenter": "asmr-onnx",
+    "async": true
+  }'
+```
+
+Queue status:
+
+```bash
+curl -fsS http://127.0.0.1:9000/v1/jobs
+```
+
+Only `doing` and `pending` jobs are kept in memory. Finished jobs disappear from the queue. If a background job fails, the server writes `/outputs/<uniq_key_name>.err.log`; successful jobs only produce the final subtitle file.
+
 ## Run on Docker
 
 ```bash
@@ -49,6 +80,10 @@ docker run -d \
 - `ASR_DEFAULT_LANGUAGE`: default `ja`; use `zh` or `en` for other instances
 - `ASR_VAD_FILTER`: default `0`. Keep it off for subtitle completeness, especially quiet Japanese/ASMR audio.
 - `ASR_BACKEND`: `faster-whisper` or `mock`; `mock` is for CI tests only
+- `ASR_MAX_QUEUE_SIZE`: async job queue size, default `64`
+- `ASR_ASMR_VAD_MODEL_PATH`: optional path to `Whisper-Vad-EncDec-ASMR-onnx` `model.onnx`
+- `ASR_ASMR_VAD_METADATA_PATH`: optional path to `model_metadata.json`
+- `ASR_ASMR_VAD_FEATURE_EXTRACTOR_PATH`: optional path containing Whisper feature extractor files
 
 ## Recommended instances
 
@@ -77,6 +112,15 @@ If you only download the model-only artifact, unpack it as:
 ```bash
 mkdir -p /data/asr-models/asr-model-ja-kotoba
 tar -C /data/asr-models/asr-model-ja-kotoba -I zstd -xf asr-model-ja-kotoba.tar.zst
+```
+
+Run **Build ASMR VAD Pack** to download `Whisper-Vad-EncDec-ASMR-onnx` plus the required Whisper feature extractor files. Mount it like this:
+
+```bash
+-v /data/asr-models/asr-asmr-vad-onnx:/asmr-vad:ro \
+-e ASR_ASMR_VAD_MODEL_PATH=/asmr-vad/model.onnx \
+-e ASR_ASMR_VAD_METADATA_PATH=/asmr-vad/model_metadata.json \
+-e ASR_ASMR_VAD_FEATURE_EXTRACTOR_PATH=/asmr-vad
 ```
 
 ## k3s with Tesla M40
