@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import gc
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,11 @@ class Transcriber:
     @property
     def model_loaded(self) -> bool:
         return self.settings.backend == "mock" or self._model is not None
+
+    def unload(self) -> None:
+        with self._lock:
+            self._model = None
+            gc.collect()
 
     def preload(self) -> None:
         if self.settings.backend != "mock":

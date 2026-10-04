@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 from pathlib import Path
 from typing import Literal
 import queue
@@ -21,6 +22,7 @@ from .transcriber import Transcriber
 app = FastAPI(title="local-asr-server", version=__version__)
 transcriber = Transcriber(settings)
 job_queue: JobQueue | None = None
+idle_unload_timer: threading.Timer | None = None
 
 
 class SubtitleRequest(BaseModel):
@@ -58,6 +60,34 @@ def write_subtitle_file(
     return output_path, len(segments)
 
 
+def schedule_idle_unload() -> None:
+    global idle_unload_timer
+    if settings.idle_unload_seconds <= 0 or settings.backend == "mock":
+        return
+    if idle_unload_timer is not None:
+        idle_unload_timer.cancel()
+    idle_unload_timer = threading.Timer(settings.idle_unload_seconds, unload_model_if_idle)
+    idle_unload_timer.daemon = True
+    idle_unload_timer.start()
+
+
+def cancel_idle_unload() -> None:
+    global idle_unload_timer
+    if idle_unload_timer is not None:
+        idle_unload_timer.cancel()
+        idle_unload_timer = None
+
+
+def unload_model_if_idle() -> None:
+    global idle_unload_timer
+    idle_unload_timer = None
+    if job_queue is not None:
+        snapshot = job_queue.snapshot()
+        if snapshot["doing"] is not None or snapshot["pending_count"]:
+            return
+    transcriber.unload()
+
+
 def err_log_key(output_key: str) -> str:
     return validate_output_key(f"{output_key}.err.log")
 
@@ -68,6 +98,7 @@ def atomic_write_error_log(job: SubtitleJob, exc: BaseException) -> None:
 
 
 def run_job(job: SubtitleJob) -> None:
+    cancel_idle_unload()
     write_subtitle_file(
         Path(job.input_path),
         job.output_key,
@@ -102,7 +133,7 @@ def fsync_unlink(path: Path) -> None:
 def startup() -> None:
     global job_queue
     settings.output_dir.mkdir(parents=True, exist_ok=True)
-    job_queue = JobQueue(settings.max_queue_size, run_job, atomic_write_error_log)
+    job_queue = JobQueue(settings.max_queue_size, run_job, atomic_write_error_log, schedule_idle_unload)
     job_queue.start()
     if settings.preload_model:
         transcriber.preload()
@@ -133,6 +164,7 @@ def health() -> dict:
         "compute_type": settings.compute_type,
         "default_language": settings.default_language,
         "vad_filter": settings.vad_filter,
+        "idle_unload_seconds": settings.idle_unload_seconds,
         "queue": job_queue.snapshot() if job_queue else None,
         "asmr_vad_model_path": settings.asmr_vad_model_path,
         "input_dir": str(settings.input_dir),
@@ -163,6 +195,7 @@ def create_subtitles(request: SubtitleRequest) -> dict:
         if request.async_mode:
             if job_queue is None:
                 raise RuntimeError("job queue is not initialized")
+            cancel_idle_unload()
             fsync_unlink(error_path)
             job = SubtitleJob(
                 job_id=new_job_id(),
@@ -196,6 +229,7 @@ def create_subtitles(request: SubtitleRequest) -> dict:
             request.vad_filter,
             segmenter,
         )
+        schedule_idle_unload()
     except PathValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except queue.Full as exc:

@@ -48,10 +48,17 @@ class SubtitleJob:
 
 
 class JobQueue:
-    def __init__(self, max_size: int, handler: Callable[[SubtitleJob], None], error_writer: Callable[[SubtitleJob, BaseException], None]):
+    def __init__(
+        self,
+        max_size: int,
+        handler: Callable[[SubtitleJob], None],
+        error_writer: Callable[[SubtitleJob, BaseException], None],
+        idle_callback: Callable[[], None] | None = None,
+    ):
         self.max_size = max_size
         self.handler = handler
         self.error_writer = error_writer
+        self.idle_callback = idle_callback
         self._queue: queue.Queue[SubtitleJob | None] = queue.Queue(maxsize=max_size)
         self._pending: list[SubtitleJob] = []
         self._doing: SubtitleJob | None = None
@@ -105,7 +112,10 @@ class JobQueue:
                 with self._lock:
                     if self._doing and self._doing.job_id == job.job_id:
                         self._doing = None
+                    became_idle = self._doing is None and not self._pending
                 self._queue.task_done()
+                if became_idle and self.idle_callback is not None:
+                    self.idle_callback()
 
 
 def new_job_id() -> str:

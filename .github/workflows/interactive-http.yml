@@ -51,6 +51,10 @@ on:
         description: Minutes to keep endpoint alive
         required: false
         default: "60"
+      idle_unload_seconds:
+        description: ASR_IDLE_UNLOAD_SECONDS for the test server. 0 disables.
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -233,6 +237,7 @@ jobs:
             -e ASR_DEVICE=cpu \
             -e ASR_COMPUTE_TYPE=int8 \
             -e ASR_DEFAULT_LANGUAGE=ja \
+            -e ASR_IDLE_UNLOAD_SECONDS="${{ inputs.idle_unload_seconds }}" \
             -e ASR_ASMR_VAD_MODEL_PATH=/asmr-vad/model.onnx \
             -e ASR_ASMR_VAD_METADATA_PATH=/asmr-vad/model_metadata.json \
             -e ASR_ASMR_VAD_FEATURE_EXTRACTOR_PATH=/asmr-vad \
@@ -275,6 +280,13 @@ jobs:
           test -s "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt"
           test ! -e "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt.tmp"
           curl -fsS http://127.0.0.1:9000/v1/jobs | tee "$RUNNER_TEMP/asr-jobs-final.json" | grep -q '"pending_count":0'
+
+      - name: Smoke test idle unload
+        if: ${{ inputs.idle_unload_seconds != '0' }}
+        shell: bash
+        run: |
+          sleep "$(( ${{ inputs.idle_unload_seconds }} + 3 ))"
+          curl -fsS http://127.0.0.1:9000/health | tee "$RUNNER_TEMP/asr-health-after-idle.json" | grep -q '"model_loaded":false'
 
       - name: Smoke test ASMR VAD segmenter
         if: ${{ inputs.asmr_vad_artifact != '' && inputs.backend == 'faster-whisper' }}
@@ -430,6 +442,7 @@ jobs:
         run: |
           docker logs local-asr-server >/tmp/local-asr-server.log 2>&1 || true
           cp "$RUNNER_TEMP/asr-health.json" /tmp/asr-health.json 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-health-after-idle.json" /tmp/asr-health-after-idle.json 2>/dev/null || true
           cp "$RUNNER_TEMP/asr-response.json" /tmp/asr-response.json 2>/dev/null || true
           cp "$RUNNER_TEMP/asr-async-response.json" /tmp/asr-async-response.json 2>/dev/null || true
           cp "$RUNNER_TEMP/asr-asmr-response.json" /tmp/asr-asmr-response.json 2>/dev/null || true
@@ -451,6 +464,7 @@ jobs:
           path: |
             /tmp/local-asr-server.log
             /tmp/asr-health.json
+            /tmp/asr-health-after-idle.json
             /tmp/asr-response.json
             /tmp/asr-async-response.json
             /tmp/asr-asmr-response.json

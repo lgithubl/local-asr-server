@@ -80,6 +80,7 @@ docker run -d \
 - `ASR_DEFAULT_LANGUAGE`: default `ja`; use `zh` or `en` for other instances
 - `ASR_VAD_FILTER`: default `0`. Keep it off for subtitle completeness, especially quiet Japanese/ASMR audio.
 - `ASR_BACKEND`: `faster-whisper` or `mock`; `mock` is for CI tests only
+- `ASR_IDLE_UNLOAD_SECONDS`: default `0` disables unloading. Set `300` to unload the ASR model after 5 idle minutes.
 - `ASR_MAX_QUEUE_SIZE`: async job queue size, default `64`
 - `ASR_ASMR_VAD_MODEL_PATH`: optional path to `Whisper-Vad-EncDec-ASMR-onnx` `model.onnx`
 - `ASR_ASMR_VAD_METADATA_PATH`: optional path to `model_metadata.json`

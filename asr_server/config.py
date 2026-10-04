@@ -27,6 +27,7 @@ class Settings:
     beam_size: int = int(os.getenv("ASR_BEAM_SIZE", "5"))
     vad_filter: bool = _bool_env("ASR_VAD_FILTER", False)
     preload_model: bool = _bool_env("ASR_PRELOAD_MODEL", True)
+    idle_unload_seconds: int = int(os.getenv("ASR_IDLE_UNLOAD_SECONDS", "0"))
     max_queue_size: int = int(os.getenv("ASR_MAX_QUEUE_SIZE", "64"))
     asmr_vad_model_path: str = os.getenv("ASR_ASMR_VAD_MODEL_PATH", "")
     asmr_vad_metadata_path: str = os.getenv("ASR_ASMR_VAD_METADATA_PATH", "")

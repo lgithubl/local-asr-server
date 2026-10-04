@@ -22,6 +22,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ASR_COMPUTE_TYPE=float32 \
     ASR_DEFAULT_LANGUAGE=ja \
     ASR_VAD_FILTER=0 \
+    ASR_IDLE_UNLOAD_SECONDS=0 \
     ASR_PRELOAD_MODEL=1
 
 RUN apt-get update \
