@@ -74,6 +74,74 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Prepare runtime package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "${{ inputs.artifact_name }}-runtime/models" "${{ inputs.artifact_name }}-runtime/inputs" "${{ inputs.artifact_name }}-runtime/outputs"
+          cp -a "$RUNNER_TEMP/model/." "${{ inputs.artifact_name }}-runtime/models/"
+          cat > "${{ inputs.artifact_name }}-runtime/docker.env" <<'EOF'
+          ASR_BACKEND=faster-whisper
+          ASR_MODEL_PATH=/models
+          ASR_DEVICE=cuda
+          ASR_COMPUTE_TYPE=int8_float16
+          ASR_DEFAULT_LANGUAGE=ja
+          ASR_INPUT_DIR=/inputs
+          ASR_OUTPUT_DIR=/outputs
+          EOF
+          cat > "${{ inputs.artifact_name }}-runtime/run-docker.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          IMAGE="${1:-ghcr.io/lgithubl/local-asr-server:m40}"
+          PORT="${PORT:-8910}"
+          NAME="${NAME:-local-asr-server-ja}"
+          ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+          docker run -d \
+            --name "$NAME" \
+            --restart unless-stopped \
+            --gpus all \
+            -p "$PORT:8080" \
+            --env-file "$ROOT/docker.env" \
+            -v "$ROOT/inputs:/inputs:ro" \
+            -v "$ROOT/outputs:/outputs" \
+            -v "$ROOT/models:/models:ro" \
+            "$IMAGE"
+          EOF
+          chmod +x "${{ inputs.artifact_name }}-runtime/run-docker.sh"
+          cat > "${{ inputs.artifact_name }}-runtime/README.md" <<'EOF'
+          # local-asr-server Japanese runtime package
+
+          This artifact is ready to mount into `ghcr.io/lgithubl/local-asr-server:m40`.
+
+          ## Start
+
+          ```bash
+          ./run-docker.sh
+          ```
+
+          Put audio files under `inputs/`, then call:
+
+          ```bash
+          curl -X POST http://127.0.0.1:8910/v1/subtitles \
+            -H 'Content-Type: application/json' \
+            -d '{"input_path":"/inputs/demo.wav","language":"ja","output_format":"srt","uniq_key_name":"demo-ja.srt"}'
+          ```
+
+          Finished subtitles are written to `outputs/`. The service writes `.tmp` first and then atomically renames to the final `uniq_key_name`.
+          EOF
+          find "${{ inputs.artifact_name }}-runtime" -maxdepth 2 -type f | sort | sed -n '1,160p'
+          du -sh "${{ inputs.artifact_name }}-runtime"
+
+      - name: Upload runtime package
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.artifact_name }}-runtime
+          path: ${{ inputs.artifact_name }}-runtime
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Write model summary
         shell: bash
         run: |

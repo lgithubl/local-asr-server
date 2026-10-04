@@ -57,6 +57,27 @@ docker run -d \
 
 For stable production routing, run one container per model/language and route externally.
 
+## Model artifacts from Actions
+
+Run **Build Model Pack** from GitHub Actions. It uploads two artifacts:
+
+- `${artifact_name}`: compressed `tar.zst` model-only package
+- `${artifact_name}-runtime`: ready-to-run package with `models/`, empty `inputs/`, empty `outputs/`, `docker.env`, and `run-docker.sh`
+
+For Japanese, use the default artifact name `asr-model-ja-kotoba`. Download `${artifact_name}-runtime`, unzip it, put audio files into `inputs/`, and run:
+
+```bash
+cd asr-model-ja-kotoba-runtime
+./run-docker.sh ghcr.io/lgithubl/local-asr-server:m40
+```
+
+If you only download the model-only artifact, unpack it as:
+
+```bash
+mkdir -p /data/asr-models/asr-model-ja-kotoba
+tar -C /data/asr-models/asr-model-ja-kotoba -I zstd -xf asr-model-ja-kotoba.tar.zst
+```
+
 ## k3s with Tesla M40
 
 The node must already expose `nvidia.com/gpu`. See `examples/k3s-pod.yaml` for a minimal pod.
