@@ -18,7 +18,7 @@ spec:
         - name: ASR_DEVICE
           value: cuda
         - name: ASR_COMPUTE_TYPE
-          value: int8
+          value: float32
         - name: ASR_DEFAULT_LANGUAGE
           value: ja
       volumeMounts:

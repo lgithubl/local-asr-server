@@ -21,7 +21,7 @@ class Settings:
     input_dir: Path = Path(os.getenv("ASR_INPUT_DIR", "/inputs"))
     output_dir: Path = Path(os.getenv("ASR_OUTPUT_DIR", "/outputs"))
     device: str = os.getenv("ASR_DEVICE", "cuda")
-    compute_type: str = os.getenv("ASR_COMPUTE_TYPE", "int8")
+    compute_type: str = os.getenv("ASR_COMPUTE_TYPE", "float32")
     default_language: str = os.getenv("ASR_DEFAULT_LANGUAGE", "ja")
     default_format: str = os.getenv("ASR_DEFAULT_FORMAT", "srt")
     beam_size: int = int(os.getenv("ASR_BEAM_SIZE", "5"))

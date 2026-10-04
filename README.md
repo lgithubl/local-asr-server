@@ -34,7 +34,7 @@ docker run -d \
   -v /data/asr-models/kotoba-whisper-v2.1-ct2:/models:ro \
   -e ASR_MODEL_PATH=/models \
   -e ASR_DEVICE=cuda \
-  -e ASR_COMPUTE_TYPE=int8 \
+  -e ASR_COMPUTE_TYPE=float32 \
   -e ASR_DEFAULT_LANGUAGE=ja \
   ghcr.io/lgithubl/local-asr-server:m40
 ```
@@ -45,7 +45,7 @@ docker run -d \
 - `ASR_INPUT_DIR`: read-only audio root, default `/inputs`
 - `ASR_OUTPUT_DIR`: subtitle output root, default `/outputs`
 - `ASR_DEVICE`: `cuda` or `cpu`, default `cuda`
-- `ASR_COMPUTE_TYPE`: default `int8`, good for Tesla M40
+- `ASR_COMPUTE_TYPE`: default `float32`, safest for Tesla M40. Use `int8` only on GPUs/backends that support it.
 - `ASR_DEFAULT_LANGUAGE`: default `ja`; use `zh` or `en` for other instances
 - `ASR_BACKEND`: `faster-whisper` or `mock`; `mock` is for CI tests only
 

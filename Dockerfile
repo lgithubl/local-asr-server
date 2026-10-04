@@ -19,7 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ASR_INPUT_DIR=/inputs \
     ASR_OUTPUT_DIR=/outputs \
     ASR_DEVICE=cuda \
-    ASR_COMPUTE_TYPE=int8 \
+    ASR_COMPUTE_TYPE=float32 \
     ASR_DEFAULT_LANGUAGE=ja \
     ASR_PRELOAD_MODEL=1
 
