@@ -28,7 +28,7 @@ jobs:
       - name: Install tools
         run: |
           python3 -m pip install --user --upgrade pip
-          python3 -m pip install --user --no-cache-dir "huggingface_hub==0.35.3" "transformers==4.44.2"
+          python3 -m pip install --user --no-cache-dir "huggingface_hub==0.35.3" "transformers==4.29.2"
 
       - name: Download ASMR VAD model
         shell: bash
