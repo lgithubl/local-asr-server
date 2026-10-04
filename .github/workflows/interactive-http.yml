@@ -155,10 +155,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/asr-inputs" "$RUNNER_TEMP/asr-outputs" "$RUNNER_TEMP/asr-models"
           python3 - <<'PY'
           import math
+          import os
           import struct
           import wave
+          from pathlib import Path
 
-          path = "$RUNNER_TEMP/asr-inputs/sample.wav"
+          path = Path(os.environ["RUNNER_TEMP"]) / "asr-inputs" / "sample.wav"
           sample_rate = 16000
           duration = 1.0
           with wave.open(path, "wb") as wav:
