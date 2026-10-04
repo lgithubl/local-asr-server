@@ -90,6 +90,7 @@ jobs:
           ASR_DEVICE=cuda
           ASR_COMPUTE_TYPE=float32
           ASR_DEFAULT_LANGUAGE=${{ inputs.default_language }}
+          ASR_VAD_FILTER=0
           ASR_INPUT_DIR=/inputs
           ASR_OUTPUT_DIR=/outputs
           EOF

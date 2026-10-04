@@ -25,7 +25,7 @@ class Settings:
     default_language: str = os.getenv("ASR_DEFAULT_LANGUAGE", "ja")
     default_format: str = os.getenv("ASR_DEFAULT_FORMAT", "srt")
     beam_size: int = int(os.getenv("ASR_BEAM_SIZE", "5"))
-    vad_filter: bool = _bool_env("ASR_VAD_FILTER", True)
+    vad_filter: bool = _bool_env("ASR_VAD_FILTER", False)
     preload_model: bool = _bool_env("ASR_PRELOAD_MODEL", True)
 
 

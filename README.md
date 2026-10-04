@@ -47,6 +47,7 @@ docker run -d \
 - `ASR_DEVICE`: `cuda` or `cpu`, default `cuda`
 - `ASR_COMPUTE_TYPE`: default `float32`, safest for Tesla M40. Use `int8` only on GPUs/backends that support it.
 - `ASR_DEFAULT_LANGUAGE`: default `ja`; use `zh` or `en` for other instances
+- `ASR_VAD_FILTER`: default `0`. Keep it off for subtitle completeness, especially quiet Japanese/ASMR audio.
 - `ASR_BACKEND`: `faster-whisper` or `mock`; `mock` is for CI tests only
 
 ## Recommended instances

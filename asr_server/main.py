@@ -63,6 +63,7 @@ def health() -> dict:
         "device": settings.device,
         "compute_type": settings.compute_type,
         "default_language": settings.default_language,
+        "vad_filter": settings.vad_filter,
         "input_dir": str(settings.input_dir),
         "output_dir": str(settings.output_dir),
         "output_dir_writable": settings.output_dir.exists() and settings.output_dir.is_dir(),
