@@ -26,8 +26,17 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
+    build-essential \
     ffmpeg \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavfilter-dev \
+    libavformat-dev \
+    libavutil-dev \
     libgomp1 \
+    libswresample-dev \
+    libswscale-dev \
+    pkg-config \
     python3 \
     python3-pip \
   && rm -rf /var/lib/apt/lists/*
