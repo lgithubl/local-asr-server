@@ -38,6 +38,7 @@ RUN apt-get update \
     libswscale-dev \
     pkg-config \
     python3 \
+    python3-dev \
     python3-pip \
   && rm -rf /var/lib/apt/lists/*
 
