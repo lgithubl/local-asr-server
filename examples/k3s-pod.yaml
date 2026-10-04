@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: local-asr-ja
+spec:
+  containers:
+    - name: server
+      image: ghcr.io/lgithubl/local-asr-server:m40
+      ports:
+        - containerPort: 9000
+      env:
+        - name: ASR_MODEL_PATH
+          value: /models
+        - name: ASR_INPUT_DIR
+          value: /inputs
+        - name: ASR_OUTPUT_DIR
+          value: /outputs
+        - name: ASR_DEVICE
+          value: cuda
+        - name: ASR_COMPUTE_TYPE
+          value: int8
+        - name: ASR_DEFAULT_LANGUAGE
+          value: ja
+      volumeMounts:
+        - name: inputs
+          mountPath: /inputs
+          readOnly: true
+        - name: outputs
+          mountPath: /outputs
+        - name: models
+          mountPath: /models
+          readOnly: true
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+  volumes:
+    - name: inputs
+      hostPath:
+        path: /data/asr-inputs
+        type: Directory
+    - name: outputs
+      hostPath:
+        path: /data/asr-outputs
+        type: DirectoryOrCreate
+    - name: models
+      hostPath:
+        path: /data/asr-models/kotoba-whisper-v2.1-ct2
+        type: Directory

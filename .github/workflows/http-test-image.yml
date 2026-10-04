@@ -1,0 +1,222 @@
+name: HTTP Test Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_source:
+        description: Load image from artifact or pull from registry
+        required: true
+        default: artifact
+        type: choice
+        options:
+          - artifact
+          - registry
+      image:
+        description: Docker image to run
+        required: true
+        default: ghcr.io/lgithubl/local-asr-server:m40
+      image_artifact:
+        description: Image tar.gz artifact name from Build Image
+        required: true
+        default: local-asr-server-m40
+      image_run_id:
+        description: Optional Build Image run id. Empty means latest successful run.
+        required: false
+        default: ""
+      backend:
+        description: Backend for HTTP test. mock is fast; faster-whisper uses the model artifact.
+        required: true
+        default: mock
+        type: choice
+        options:
+          - mock
+          - faster-whisper
+      model_artifact:
+        description: Model artifact name from Build Model Pack when backend=faster-whisper
+        required: false
+        default: asr-model-ja-kotoba
+      model_run_id:
+        description: Optional Build Model Pack run id. Empty means latest successful run.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+jobs:
+  http-test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Login to GitHub Container Registry
+        if: ${{ inputs.image_source == 'registry' && startsWith(inputs.image, 'ghcr.io/') }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        if: ${{ inputs.image_source == 'registry' }}
+        run: docker pull "${{ inputs.image }}"
+
+      - name: Resolve image artifact run
+        if: ${{ inputs.image_source == 'artifact' }}
+        id: image-run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          RUN_ID="${{ inputs.image_run_id }}"
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID="$(gh run list \
+              --repo "${{ github.repository }}" \
+              --workflow "Build Image" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')"
+          fi
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful Build Image run found." >&2
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download and load image artifact
+        if: ${{ inputs.image_source == 'artifact' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/asr-image-artifact"
+          gh run download "${{ steps.image-run.outputs.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name "${{ inputs.image_artifact }}" \
+            --dir "$RUNNER_TEMP/asr-image-artifact"
+          find "$RUNNER_TEMP/asr-image-artifact" -type f -name '*.tar.gz' -print -quit \
+            | xargs -r -I{} sh -c 'gzip -dc "$1" | docker load' sh {}
+          docker image inspect "${{ inputs.image }}" >/dev/null
+
+      - name: Resolve model artifact run
+        if: ${{ inputs.backend == 'faster-whisper' }}
+        id: model-run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          RUN_ID="${{ inputs.model_run_id }}"
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID="$(gh run list \
+              --repo "${{ github.repository }}" \
+              --workflow "Build Model Pack" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')"
+          fi
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful Build Model Pack run found." >&2
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download model artifact
+        if: ${{ inputs.backend == 'faster-whisper' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+          mkdir -p "$RUNNER_TEMP/asr-model-artifact" "$RUNNER_TEMP/asr-models"
+          gh run download "${{ steps.model-run.outputs.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name "${{ inputs.model_artifact }}" \
+            --dir "$RUNNER_TEMP/asr-model-artifact"
+          find "$RUNNER_TEMP/asr-model-artifact" -type f -name '*.tar.zst' -print -quit \
+            | xargs -r -I{} tar -C "$RUNNER_TEMP/asr-models" -I zstd -xf {}
+          du -sh "$RUNNER_TEMP/asr-models"
+
+      - name: Prepare volumes
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/asr-inputs" "$RUNNER_TEMP/asr-outputs" "$RUNNER_TEMP/asr-models"
+          printf 'not real audio; mock backend does not decode it\n' > "$RUNNER_TEMP/asr-inputs/sample.wav"
+
+      - name: Start server
+        shell: bash
+        run: |
+          docker run -d --name local-asr-http \
+            -p 9000:9000 \
+            -v "$RUNNER_TEMP/asr-inputs:/inputs:ro" \
+            -v "$RUNNER_TEMP/asr-outputs:/outputs" \
+            -v "$RUNNER_TEMP/asr-models:/models:ro" \
+            -e ASR_BACKEND="${{ inputs.backend }}" \
+            -e ASR_MODEL_PATH=/models \
+            -e ASR_DEVICE=cpu \
+            -e ASR_COMPUTE_TYPE=int8 \
+            -e ASR_DEFAULT_LANGUAGE=ja \
+            "${{ inputs.image }}"
+
+      - name: Wait for server
+        shell: bash
+        run: |
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:9000/health | tee /tmp/asr-health.json | grep -q '"ok":true'; then
+              exit 0
+            fi
+            docker logs --tail 80 local-asr-http || true
+            sleep 2
+          done
+          docker logs local-asr-http || true
+          exit 1
+
+      - name: HTTP subtitle test
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fsS -X POST http://127.0.0.1:9000/v1/subtitles \
+            -H 'Content-Type: application/json' \
+            -d '{"input_path":"/inputs/sample.wav","language":"ja","output_format":"srt","uniq_key_name":"sample-ja.srt"}' \
+            | tee /tmp/asr-response.json
+          test -s "$RUNNER_TEMP/asr-outputs/sample-ja.srt"
+          test ! -e "$RUNNER_TEMP/asr-outputs/sample-ja.srt.tmp"
+          grep -q 'sample.wav' "$RUNNER_TEMP/asr-outputs/sample-ja.srt" || test "${{ inputs.backend }}" = "faster-whisper"
+
+      - name: Capture browser screenshot
+        shell: bash
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install --no-audit --no-fund playwright@1.56.1
+          npx playwright install --with-deps chromium
+          npx playwright screenshot --wait-for-timeout=2000 http://127.0.0.1:9000/ /tmp/local-asr-home.png
+
+      - name: Collect logs
+        if: always()
+        shell: bash
+        run: |
+          docker logs local-asr-http >/tmp/local-asr-container.log 2>&1 || true
+          docker ps -a >/tmp/local-asr-docker-ps.txt || true
+          cp "$RUNNER_TEMP/asr-outputs/sample-ja.srt" /tmp/sample-ja.srt 2>/dev/null || true
+
+      - name: Upload HTTP test artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: local-asr-http-test
+          path: |
+            /tmp/asr-health.json
+            /tmp/asr-response.json
+            /tmp/sample-ja.srt
+            /tmp/local-asr-home.png
+            /tmp/local-asr-container.log
+            /tmp/local-asr-docker-ps.txt
+          if-no-files-found: warn
+          retention-days: 7

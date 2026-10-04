@@ -1,0 +1,5 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+ctranslate2==3.24.0
+faster-whisper==0.10.1
