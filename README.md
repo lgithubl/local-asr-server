@@ -64,7 +64,7 @@ Run **Build Model Pack** from GitHub Actions. It uploads two artifacts:
 - `${artifact_name}`: compressed `tar.zst` model-only package
 - `${artifact_name}-runtime`: ready-to-run package with `models/`, empty `inputs/`, empty `outputs/`, `docker.env`, and `run-docker.sh`
 
-For Japanese, use the default artifact name `asr-model-ja-kotoba`. Download `${artifact_name}-runtime`, unzip it, put audio files into `inputs/`, and run:
+For Japanese, use the artifact name `asr-model-ja-kotoba` and `default_language=ja`. For Chinese, use `asr-model-zh-large-v3` and `default_language=zh`. Download `${artifact_name}-runtime`, unzip it, put audio files into `inputs/`, and run:
 
 ```bash
 cd asr-model-ja-kotoba-runtime

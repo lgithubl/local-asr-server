@@ -15,6 +15,10 @@ on:
         description: Optional Hugging Face revision
         required: false
         default: main
+      default_language:
+        description: Default ASR language for runtime package, for example ja, zh, en
+        required: true
+        default: ja
 
 permissions:
   contents: read
@@ -85,7 +89,7 @@ jobs:
           ASR_MODEL_PATH=/models
           ASR_DEVICE=cuda
           ASR_COMPUTE_TYPE=int8_float16
-          ASR_DEFAULT_LANGUAGE=ja
+          ASR_DEFAULT_LANGUAGE=${{ inputs.default_language }}
           ASR_INPUT_DIR=/inputs
           ASR_OUTPUT_DIR=/outputs
           EOF
@@ -111,7 +115,7 @@ jobs:
           EOF
           chmod +x "${{ inputs.artifact_name }}-runtime/run-docker.sh"
           cat > "${{ inputs.artifact_name }}-runtime/README.md" <<'EOF'
-          # local-asr-server Japanese runtime package
+          # local-asr-server runtime package
 
           This artifact is ready to mount into `ghcr.io/lgithubl/local-asr-server:m40`.
 
@@ -126,7 +130,7 @@ jobs:
           ```bash
           curl -X POST http://127.0.0.1:8910/v1/subtitles \
             -H 'Content-Type: application/json' \
-            -d '{"input_path":"/inputs/demo.wav","language":"ja","output_format":"srt","uniq_key_name":"demo-ja.srt"}'
+            -d '{"input_path":"/inputs/demo.wav","language":"${{ inputs.default_language }}","output_format":"srt","uniq_key_name":"demo-${{ inputs.default_language }}.srt"}'
           ```
 
           Finished subtitles are written to `outputs/`. The service writes `.tmp` first and then atomically renames to the final `uniq_key_name`.
