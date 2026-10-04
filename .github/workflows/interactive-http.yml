@@ -153,7 +153,22 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/asr-inputs" "$RUNNER_TEMP/asr-outputs" "$RUNNER_TEMP/asr-models"
-          printf 'not real audio; mock backend does not decode it\n' > "$RUNNER_TEMP/asr-inputs/sample.wav"
+          python3 - <<'PY'
+          import math
+          import struct
+          import wave
+
+          path = "$RUNNER_TEMP/asr-inputs/sample.wav"
+          sample_rate = 16000
+          duration = 1.0
+          with wave.open(path, "wb") as wav:
+              wav.setnchannels(1)
+              wav.setsampwidth(2)
+              wav.setframerate(sample_rate)
+              for i in range(int(sample_rate * duration)):
+                  value = int(1200 * math.sin(2 * math.pi * 440 * i / sample_rate))
+                  wav.writeframes(struct.pack("<h", value))
+          PY
 
       - name: Start ASR server
         shell: bash
