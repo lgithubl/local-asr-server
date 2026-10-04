@@ -88,7 +88,7 @@ jobs:
           ASR_BACKEND=faster-whisper
           ASR_MODEL_PATH=/models
           ASR_DEVICE=cuda
-          ASR_COMPUTE_TYPE=int8_float16
+          ASR_COMPUTE_TYPE=int8
           ASR_DEFAULT_LANGUAGE=${{ inputs.default_language }}
           ASR_INPUT_DIR=/inputs
           ASR_OUTPUT_DIR=/outputs
