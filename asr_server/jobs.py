@@ -17,6 +17,8 @@ JobStatus = Literal["pending", "doing"]
 class SubtitleJob:
     job_id: str
     input_path: str
+    trace_id: str
+    output_dir: str
     output_key: str
     output_path: str
     tmp_path: str
@@ -34,6 +36,8 @@ class SubtitleJob:
             "job_id": self.job_id,
             "status": self.status,
             "input_path": self.input_path,
+            "trace_id": self.trace_id,
+            "output_dir": self.output_dir,
             "output_key": self.output_key,
             "output_path": self.output_path,
             "tmp_path": self.tmp_path,
@@ -54,11 +58,17 @@ class JobQueue:
         handler: Callable[[SubtitleJob], None],
         error_writer: Callable[[SubtitleJob, BaseException], None],
         idle_callback: Callable[[], None] | None = None,
+        start_callback: Callable[[SubtitleJob], None] | None = None,
+        success_callback: Callable[[SubtitleJob], None] | None = None,
+        error_callback: Callable[[SubtitleJob, BaseException], None] | None = None,
     ):
         self.max_size = max_size
         self.handler = handler
         self.error_writer = error_writer
         self.idle_callback = idle_callback
+        self.start_callback = start_callback
+        self.success_callback = success_callback
+        self.error_callback = error_callback
         self._queue: queue.Queue[SubtitleJob | None] = queue.Queue(maxsize=max_size)
         self._pending: list[SubtitleJob] = []
         self._doing: SubtitleJob | None = None
@@ -75,10 +85,10 @@ class JobQueue:
         with self._lock:
             if len(self._pending) + (1 if self._doing else 0) >= self.max_size:
                 raise queue.Full
-            if any(existing.output_key == job.output_key for existing in self._pending) or (
-                self._doing is not None and self._doing.output_key == job.output_key
+            if any(existing.output_path == job.output_path for existing in self._pending) or (
+                self._doing is not None and self._doing.output_path == job.output_path
             ):
-                raise ValueError("a job with the same output key is already pending or running")
+                raise ValueError("a job with the same output path is already pending or running")
             self._pending.append(job)
         self._queue.put(job)
 
@@ -104,9 +114,15 @@ class JobQueue:
                 job.status = "doing"
                 job.started_at = time.time()
                 self._doing = job
+            if self.start_callback is not None:
+                self.start_callback(job)
             try:
                 self.handler(job)
+                if self.success_callback is not None:
+                    self.success_callback(job)
             except Exception as exc:
+                if self.error_callback is not None:
+                    self.error_callback(job, exc)
                 self.error_writer(job, exc)
             finally:
                 with self._lock:

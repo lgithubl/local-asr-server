@@ -14,8 +14,9 @@ from pydantic import AliasChoices, BaseModel, Field
 from . import __version__
 from .config import settings
 from .jobs import JobQueue, SubtitleJob, format_exception, new_job_id
-from .paths import PathValidationError, atomic_write, resolve_input_path, validate_output_key
+from .paths import PathValidationError, atomic_write, resolve_input_path, resolve_output_path, validate_output_key, validate_output_subdir
 from .subtitles import render_subtitles
+from .tracing import trace_store
 from .transcriber import Transcriber
 
 
@@ -29,6 +30,7 @@ class SubtitleRequest(BaseModel):
     input_path: str = Field(..., description="Absolute path under ASR_INPUT_DIR, or relative path inside it")
     language: str | None = Field(None, description="ja, zh, en, or any Whisper language code")
     output_format: Literal["srt", "vtt", "json", "txt"] = "srt"
+    output_dir: str | None = Field(None, description="Optional relative directory under ASR_OUTPUT_DIR")
     uniq_key_name: str | None = Field(None, description="Final output file name, written under ASR_OUTPUT_DIR")
     vad_filter: bool | None = Field(None, description="Override ASR_VAD_FILTER for this request")
     segmenter: Literal["none", "asmr-onnx"] = Field("none", description="Optional pre-segmenter before ASR")
@@ -48,6 +50,7 @@ def default_output_key(audio_path: Path, language: str | None, output_format: st
 
 def write_subtitle_file(
     audio_path: Path,
+    output_subdir: str,
     output_key: str,
     language: str | None,
     output_format: str,
@@ -55,8 +58,9 @@ def write_subtitle_file(
     segmenter: str,
 ) -> tuple[Path, int]:
     segments = transcriber.transcribe(audio_path, language, vad_filter=vad_filter, segmenter=segmenter)
-    content = render_subtitles(segments, output_format)
-    output_path = atomic_write(settings.output_dir, output_key, content)
+    with trace_store.stage("render_subtitle"):
+        content = render_subtitles(segments, output_format)
+    output_path = atomic_write(settings.output_dir, output_key, content, output_subdir=output_subdir)
     return output_path, len(segments)
 
 
@@ -94,19 +98,57 @@ def err_log_key(output_key: str) -> str:
 
 def atomic_write_error_log(job: SubtitleJob, exc: BaseException) -> None:
     content = format_exception(exc)
-    atomic_write(settings.output_dir, err_log_key(job.output_key), content)
+    record = trace_store.get(job.trace_id)
+    token = trace_store.set_current(record)
+    try:
+        with trace_store.stage("write_error_log"):
+            atomic_write(settings.output_dir, err_log_key(job.output_key), content, output_subdir=job.output_dir)
+    finally:
+        trace_store.reset_current(token)
 
 
 def run_job(job: SubtitleJob) -> None:
     cancel_idle_unload()
-    write_subtitle_file(
-        Path(job.input_path),
-        job.output_key,
-        job.language,
-        job.output_format,
-        job.vad_filter,
-        job.segmenter,
-    )
+    record = trace_store.get(job.trace_id)
+    token = trace_store.set_current(record)
+    try:
+        output_path, segment_count = write_subtitle_file(
+            Path(job.input_path),
+            job.output_dir,
+            job.output_key,
+            job.language,
+            job.output_format,
+            job.vad_filter,
+            job.segmenter,
+        )
+        if record is not None:
+            record.output_path = str(output_path)
+            record.segment_count = segment_count
+    finally:
+        trace_store.reset_current(token)
+
+
+def on_job_start(job: SubtitleJob) -> None:
+    trace_store.mark_started(job.trace_id, job.started_at)
+
+
+def on_job_success(job: SubtitleJob) -> None:
+    record = trace_store.get(job.trace_id)
+    trace_store.mark_done(job.trace_id, record.segment_count if record else None)
+
+
+def on_job_error(job: SubtitleJob, exc: BaseException) -> None:
+    trace_store.mark_error(job.trace_id, exc)
+
+
+def model_snapshot() -> dict:
+    return {
+        "loaded": transcriber.model_loaded,
+        "idle_unload_seconds": settings.idle_unload_seconds,
+        "backend": settings.backend,
+        "device": settings.device,
+        "compute_type": settings.compute_type,
+    }
 
 
 def resolve_segmenter(request: SubtitleRequest) -> str:
@@ -133,7 +175,17 @@ def fsync_unlink(path: Path) -> None:
 def startup() -> None:
     global job_queue
     settings.output_dir.mkdir(parents=True, exist_ok=True)
-    job_queue = JobQueue(settings.max_queue_size, run_job, atomic_write_error_log, schedule_idle_unload)
+    trace_store.enabled = settings.trace_enabled
+    trace_store.max_items = max(1, settings.trace_max_items)
+    job_queue = JobQueue(
+        settings.max_queue_size,
+        run_job,
+        atomic_write_error_log,
+        schedule_idle_unload,
+        start_callback=on_job_start,
+        success_callback=on_job_success,
+        error_callback=on_job_error,
+    )
     job_queue.start()
     if settings.preload_model:
         transcriber.preload()
@@ -180,17 +232,58 @@ def list_jobs() -> dict:
     return job_queue.snapshot()
 
 
+@app.get("/v1/stats")
+def stats() -> dict:
+    snapshot = job_queue.snapshot() if job_queue else None
+    return trace_store.summary(snapshot, model_snapshot())
+
+
+@app.get("/v1/traces")
+def traces(status: str | None = None, limit: int | None = None) -> dict:
+    safe_limit = None if limit is None else max(0, min(limit, settings.trace_max_items))
+    return {"items": trace_store.list_records(status=status, limit=safe_limit)}
+
+
+@app.get("/v1/traces/{job_id}")
+def trace_detail(job_id: str) -> dict:
+    record = trace_store.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return record.to_dict()
+
+
 @app.post("/v1/subtitles")
 def create_subtitles(request: SubtitleRequest) -> dict:
+    job_id = new_job_id()
+    record = trace_store.create(
+        job_id,
+        status="pending" if request.async_mode else "doing",
+        input_path=request.input_path,
+        output_dir=request.output_dir or "",
+        language=request.language,
+        async_mode=request.async_mode,
+        vad_filter=request.vad_filter,
+        segmenter=request.segmenter,
+        output_format=request.output_format,
+    )
+    token = trace_store.set_current(record)
     try:
-        audio_path = resolve_input_path(settings.input_dir, request.input_path)
-        output_key = validate_output_key(
-            request.uniq_key_name or default_output_key(audio_path, request.language, request.output_format)
-        )
-        output_path = settings.output_dir / output_key
+        with trace_store.stage("validate_request"):
+            audio_path = resolve_input_path(settings.input_dir, request.input_path)
+            output_subdir = validate_output_subdir(request.output_dir)
+            output_key = validate_output_key(
+                request.uniq_key_name or default_output_key(audio_path, request.language, request.output_format)
+            )
+            output_path = resolve_output_path(settings.output_dir, output_subdir, output_key)
         tmp_path = Path(str(output_path) + ".tmp")
-        error_path = settings.output_dir / err_log_key(output_key)
+        error_path = resolve_output_path(settings.output_dir, output_subdir, err_log_key(output_key))
         segmenter = resolve_segmenter(request)
+        if record is not None:
+            record.input_path = str(audio_path)
+            record.output_dir = output_subdir
+            record.output_key = output_key
+            record.output_path = str(output_path)
+            record.segmenter = segmenter
 
         if request.async_mode:
             if job_queue is None:
@@ -198,8 +291,10 @@ def create_subtitles(request: SubtitleRequest) -> dict:
             cancel_idle_unload()
             fsync_unlink(error_path)
             job = SubtitleJob(
-                job_id=new_job_id(),
+                job_id=job_id,
                 input_path=str(audio_path),
+                trace_id=job_id,
+                output_dir=output_subdir,
                 output_key=output_key,
                 output_path=str(output_path),
                 tmp_path=str(tmp_path),
@@ -215,14 +310,18 @@ def create_subtitles(request: SubtitleRequest) -> dict:
                 "accepted": True,
                 "async": True,
                 "job_id": job.job_id,
+                "trace_id": job.trace_id,
+                "output_dir": output_subdir,
                 "output_key": output_key,
                 "output_path": str(output_path),
                 "tmp_path": str(tmp_path),
                 "err_log_path": str(error_path),
             }
 
+        trace_store.mark_started(job_id)
         output_path, segment_count = write_subtitle_file(
             audio_path,
+            output_subdir,
             output_key,
             request.language,
             request.output_format,
@@ -230,17 +329,24 @@ def create_subtitles(request: SubtitleRequest) -> dict:
             segmenter,
         )
         schedule_idle_unload()
+        trace_store.mark_done(job_id, segment_count)
     except PathValidationError as exc:
+        trace_store.mark_error(job_id, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except queue.Full as exc:
+        trace_store.mark_error(job_id, "job queue is full")
         raise HTTPException(status_code=429, detail="job queue is full") from exc
     except ValueError as exc:
+        trace_store.mark_error(job_id, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        trace_store.mark_error(job_id, exc)
         if "output_key" in locals():
             fallback_job = SubtitleJob(
-                job_id="sync",
+                job_id=job_id,
                 input_path=str(audio_path) if "audio_path" in locals() else request.input_path,
+                trace_id=job_id,
+                output_dir=output_subdir if "output_subdir" in locals() else "",
                 output_key=output_key,
                 output_path=str(output_path) if "output_path" in locals() else str(settings.output_dir / output_key),
                 tmp_path=str(tmp_path) if "tmp_path" in locals() else str(settings.output_dir / f"{output_key}.tmp"),
@@ -252,14 +358,19 @@ def create_subtitles(request: SubtitleRequest) -> dict:
             )
             atomic_write_error_log(fallback_job, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        trace_store.reset_current(token)
 
     return {
         "ok": True,
         "accepted": False,
         "async": False,
+        "job_id": job_id,
+        "trace_id": job_id,
+        "output_dir": output_subdir,
         "output_key": output_key,
         "output_path": str(output_path),
         "segments": segment_count,
         "tmp_path": str(output_path) + ".tmp",
-        "err_log_path": str(settings.output_dir / err_log_key(output_key)),
+        "err_log_path": str(error_path),
     }

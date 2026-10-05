@@ -9,6 +9,7 @@ import numpy as np
 from .asmr_vad import AsmrVadSegmenter
 from .config import Settings
 from .subtitles import Segment
+from .tracing import trace_store
 
 
 class Transcriber:
@@ -36,11 +37,12 @@ class Transcriber:
             return self._model
         from faster_whisper import WhisperModel
 
-        self._model = WhisperModel(
-            self.settings.model_path,
-            device=self.settings.device,
-            compute_type=self.settings.compute_type,
-        )
+        with trace_store.stage("load_model"):
+            self._model = WhisperModel(
+                self.settings.model_path,
+                device=self.settings.device,
+                compute_type=self.settings.compute_type,
+            )
         return self._model
 
     def transcribe(
@@ -59,19 +61,22 @@ class Transcriber:
 
         with self._lock:
             model = self._load_model()
-            raw_segments, _info = model.transcribe(
-                str(audio_path),
-                language=language or self.settings.default_language,
-                beam_size=self.settings.beam_size,
-                vad_filter=self.settings.vad_filter if vad_filter is None else vad_filter,
-            )
-            return [Segment(start=s.start, end=s.end, text=s.text) for s in raw_segments]
+            with trace_store.stage("faster_whisper_transcribe"):
+                raw_segments, _info = model.transcribe(
+                    str(audio_path),
+                    language=language or self.settings.default_language,
+                    beam_size=self.settings.beam_size,
+                    vad_filter=self.settings.vad_filter if vad_filter is None else vad_filter,
+                )
+                return [Segment(start=s.start, end=s.end, text=s.text) for s in raw_segments]
 
     def _transcribe_with_asmr_vad(self, audio_path: Path, language: str | None, vad_filter: bool | None) -> list[Segment]:
         from faster_whisper.audio import decode_audio
 
-        audio = decode_audio(str(audio_path), sampling_rate=16000)
-        windows = self._asmr_vad.segment(audio)
+        with trace_store.stage("decode_audio"):
+            audio = decode_audio(str(audio_path), sampling_rate=16000)
+        with trace_store.stage("asmr_vad_segment"):
+            windows = self._asmr_vad.segment(audio)
         if not windows:
             return []
 
@@ -84,18 +89,19 @@ class Transcriber:
                 chunk = np.ascontiguousarray(audio[start_sample:end_sample])
                 if chunk.size == 0:
                     continue
-                raw_segments, _info = model.transcribe(
-                    chunk,
-                    language=language or self.settings.default_language,
-                    beam_size=self.settings.beam_size,
-                    vad_filter=self.settings.vad_filter if vad_filter is None else vad_filter,
-                )
-                for segment in raw_segments:
-                    segments.append(
-                        Segment(
-                            start=segment.start + window.start,
-                            end=segment.end + window.start,
-                            text=segment.text,
-                        )
+                with trace_store.stage("faster_whisper_transcribe"):
+                    raw_segments, _info = model.transcribe(
+                        chunk,
+                        language=language or self.settings.default_language,
+                        beam_size=self.settings.beam_size,
+                        vad_filter=self.settings.vad_filter if vad_filter is None else vad_filter,
                     )
+                    for segment in raw_segments:
+                        segments.append(
+                            Segment(
+                                start=segment.start + window.start,
+                                end=segment.end + window.start,
+                                text=segment.text,
+                            )
+                        )
         return segments

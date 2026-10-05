@@ -1,0 +1,52 @@
+name: Build Code Pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Code artifact tag
+        required: false
+        default: m40
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Prepare artifact name
+        id: artifact
+        shell: bash
+        run: |
+          echo "name=local-asr-server-code-${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - name: Export mountable code artifact
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/${{ steps.artifact.outputs.name }}"
+          cp -R asr_server "$RUNNER_TEMP/${{ steps.artifact.outputs.name }}/asr_server"
+          cp entrypoint.sh requirements.txt README.md "$RUNNER_TEMP/${{ steps.artifact.outputs.name }}/"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/${{ steps.artifact.outputs.name }}/VERSION"
+          tar -C "$RUNNER_TEMP" -czf "${{ steps.artifact.outputs.name }}.tar.gz" "${{ steps.artifact.outputs.name }}"
+
+      - name: Upload mountable code artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.artifact.outputs.name }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Write summary
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Code artifact
+
+          Download artifact \`${{ steps.artifact.outputs.name }}\`, unpack it, and mount the unpacked directory at \`/workspace/local-asr-server:ro\`.
+          EOF

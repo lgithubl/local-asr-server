@@ -15,16 +15,18 @@ curl -fsS -X POST http://127.0.0.1:9000/v1/subtitles \
     "input_path": "/inputs/sample.wav",
     "language": "ja",
     "output_format": "srt",
+    "output_dir": "rj123456",
     "uniq_key_name": "sample-ja.srt"
   }'
 ```
 
-The server writes `/outputs/sample-ja.srt.tmp` first. After transcription and fsync complete, it atomically renames it to `/outputs/sample-ja.srt`. External systems should watch for the final file name only.
+The server writes `/outputs/rj123456/sample-ja.srt.tmp` first. After transcription and fsync complete, it atomically renames it to `/outputs/rj123456/sample-ja.srt`. External systems should watch for the final file name only.
 
 Supported output formats: `srt`, `vtt`, `json`, `txt`.
 
 Request options:
 
+- `output_dir`: optional relative directory under `ASR_OUTPUT_DIR`, for example `rj123456` or `rj123456/part01`. The server creates it automatically. Absolute paths, `..`, backslashes, and unsafe characters are rejected.
 - `vad_filter`: optional boolean. Overrides `ASR_VAD_FILTER` for one request.
 - `async` or `async_mode`: optional boolean. When true, the API returns after validation and the server continues writing the output file in the background. Completion is still detected by the final output file appearing.
 - `segmenter`: optional, `none` or `asmr-onnx`. When `asmr-onnx`, the server uses the mounted `Whisper-Vad-EncDec-ASMR-onnx` model to split speech before ASR.
@@ -52,7 +54,17 @@ Queue status:
 curl -fsS http://127.0.0.1:9000/v1/jobs
 ```
 
-Only `doing` and `pending` jobs are kept in memory. Finished jobs disappear from the queue. If a background job fails, the server writes `/outputs/<uniq_key_name>.err.log`; successful jobs only produce the final subtitle file.
+Only `doing` and `pending` jobs are kept in `/v1/jobs`. Finished jobs disappear from the queue. If a background job fails, the server writes `<final-output-path>.err.log` in the same output directory; successful jobs only produce the final subtitle file.
+
+Trace and stats endpoints:
+
+```bash
+curl -fsS http://127.0.0.1:9000/v1/stats
+curl -fsS http://127.0.0.1:9000/v1/traces
+curl -fsS http://127.0.0.1:9000/v1/traces/<job_id>
+```
+
+Trace data is memory-only and resets when the container restarts. It records recent done/error/doing/pending jobs and stage timings such as `validate_request`, `queue_wait`, `load_model`, `decode_audio`, `asmr_vad_segment`, `faster_whisper_transcribe`, `render_subtitle`, `write_tmp_file`, `rename_final_file`, and `write_error_log`. Subtitle text is not stored in traces.
 
 ## Run on Docker
 
@@ -110,6 +122,8 @@ docker run -d \
 - `ASR_BACKEND`: `faster-whisper` or `mock`; `mock` is for CI tests only
 - `ASR_IDLE_UNLOAD_SECONDS`: default `0` disables unloading. Set `300` to unload the ASR model after 5 idle minutes.
 - `ASR_MAX_QUEUE_SIZE`: async job queue size, default `64`
+- `ASR_TRACE_ENABLED`: default `1`. Enables in-memory job trace and stage timing endpoints.
+- `ASR_TRACE_MAX_ITEMS`: default `500`. Number of recent trace records retained in memory.
 - `ASR_ASMR_VAD_MODEL_PATH`: optional path to `Whisper-Vad-EncDec-ASMR-onnx` `model.onnx`
 - `ASR_ASMR_VAD_METADATA_PATH`: optional path to `model_metadata.json`
 - `ASR_ASMR_VAD_FEATURE_EXTRACTOR_PATH`: optional path containing Whisper feature extractor files
@@ -124,7 +138,7 @@ For stable production routing, run one container per model/language and route ex
 
 ## Image and code artifacts from Actions
 
-Run **Build Image** from GitHub Actions. It uploads these artifacts by default:
+Run **Build Image** from GitHub Actions for the first install. It uploads these artifacts by default:
 
 - `local-asr-server-m40`: Docker image tarball, load with `gzip -dc local-asr-server-m40.tar.gz | docker load`
 - `local-asr-server-code-m40`: mountable app code tarball for code-only updates
@@ -144,6 +158,8 @@ Then add this mount to the Docker or k3s spec:
 ```
 
 If you do not mount external code, the container uses the code bundled in the image.
+
+For code-only updates after the first install, run **Build Code Pack** instead. It uploads only `local-asr-server-code-m40`; unpack it over the mounted code directory and restart the container. The large Docker image does not need to be reloaded.
 
 ## Model artifacts from Actions
 

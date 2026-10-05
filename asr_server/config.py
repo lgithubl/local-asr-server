@@ -29,6 +29,8 @@ class Settings:
     preload_model: bool = _bool_env("ASR_PRELOAD_MODEL", True)
     idle_unload_seconds: int = int(os.getenv("ASR_IDLE_UNLOAD_SECONDS", "0"))
     max_queue_size: int = int(os.getenv("ASR_MAX_QUEUE_SIZE", "64"))
+    trace_enabled: bool = _bool_env("ASR_TRACE_ENABLED", True)
+    trace_max_items: int = int(os.getenv("ASR_TRACE_MAX_ITEMS", "500"))
     asmr_vad_model_path: str = os.getenv("ASR_ASMR_VAD_MODEL_PATH", "")
     asmr_vad_metadata_path: str = os.getenv("ASR_ASMR_VAD_METADATA_PATH", "")
     asmr_vad_feature_extractor_path: str = os.getenv("ASR_ASMR_VAD_FEATURE_EXTRACTOR_PATH", "")
