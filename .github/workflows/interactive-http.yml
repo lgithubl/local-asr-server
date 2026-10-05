@@ -323,24 +323,26 @@ jobs:
         run: |
           curl -fsS -X POST http://127.0.0.1:9000/v1/subtitles \
             -H 'Content-Type: application/json' \
-            -d '{"input_path":"/inputs/sample.wav","language":"ja","output_format":"srt","uniq_key_name":"sample-ja.srt","vad_filter":true}' \
+            -d '{"input_path":"/inputs/sample.wav","language":"ja","output_format":"srt","output_dir":"rj-smoke","uniq_key_name":"sample-ja.srt","vad_filter":true}' \
             | tee "$RUNNER_TEMP/asr-response.json"
-          test -s "$RUNNER_TEMP/asr-outputs/sample-ja.srt"
-          test ! -e "$RUNNER_TEMP/asr-outputs/sample-ja.srt.tmp"
+          test -s "$RUNNER_TEMP/asr-outputs/rj-smoke/sample-ja.srt"
+          test ! -e "$RUNNER_TEMP/asr-outputs/rj-smoke/sample-ja.srt.tmp"
+          curl -fsS http://127.0.0.1:9000/v1/stats | tee "$RUNNER_TEMP/asr-stats.json" | grep -q '"submitted"'
+          curl -fsS http://127.0.0.1:9000/v1/traces | tee "$RUNNER_TEMP/asr-traces.json" | grep -q 'rj-smoke'
           curl -fsS -X POST http://127.0.0.1:9000/v1/subtitles \
             -H 'Content-Type: application/json' \
-            -d '{"input_path":"/inputs/sample.wav","language":"ja","output_format":"srt","uniq_key_name":"sample-ja-async.srt","vad_filter":false,"async":true}' \
+            -d '{"input_path":"/inputs/sample.wav","language":"ja","output_format":"srt","output_dir":"rj-smoke","uniq_key_name":"sample-ja-async.srt","vad_filter":false,"async":true}' \
             | tee "$RUNNER_TEMP/asr-async-response.json" | grep -q '"accepted":true'
           curl -fsS http://127.0.0.1:9000/v1/jobs | tee "$RUNNER_TEMP/asr-jobs.json"
           for i in $(seq 1 60); do
-            if [ -s "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt" ]; then
+            if [ -s "$RUNNER_TEMP/asr-outputs/rj-smoke/sample-ja-async.srt" ]; then
               break
             fi
             curl -fsS http://127.0.0.1:9000/v1/jobs | tee "$RUNNER_TEMP/asr-jobs.json"
             sleep 1
           done
-          test -s "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt"
-          test ! -e "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt.tmp"
+          test -s "$RUNNER_TEMP/asr-outputs/rj-smoke/sample-ja-async.srt"
+          test ! -e "$RUNNER_TEMP/asr-outputs/rj-smoke/sample-ja-async.srt.tmp"
           curl -fsS http://127.0.0.1:9000/v1/jobs | tee "$RUNNER_TEMP/asr-jobs-final.json" | grep -q '"pending_count":0'
 
       - name: Smoke test idle unload
@@ -511,8 +513,10 @@ jobs:
           cp "$RUNNER_TEMP/asr-jobs.json" /tmp/asr-jobs.json 2>/dev/null || true
           cp "$RUNNER_TEMP/asr-jobs-final.json" /tmp/asr-jobs-final.json 2>/dev/null || true
           cp "$RUNNER_TEMP/asr-jobs-asmr.json" /tmp/asr-jobs-asmr.json 2>/dev/null || true
-          cp "$RUNNER_TEMP/asr-outputs/sample-ja.srt" /tmp/sample-ja.srt 2>/dev/null || true
-          cp "$RUNNER_TEMP/asr-outputs/sample-ja-async.srt" /tmp/sample-ja-async.srt 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-stats.json" /tmp/asr-stats.json 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-traces.json" /tmp/asr-traces.json 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-outputs/rj-smoke/sample-ja.srt" /tmp/sample-ja.srt 2>/dev/null || true
+          cp "$RUNNER_TEMP/asr-outputs/rj-smoke/sample-ja-async.srt" /tmp/sample-ja-async.srt 2>/dev/null || true
           cp "$RUNNER_TEMP/asr-outputs/sample-ja-asmr.srt" /tmp/sample-ja-asmr.srt 2>/dev/null || true
           cp "$RUNNER_TEMP/asr-outputs/sample-ja-asmr.srt.err.log" /tmp/sample-ja-asmr.srt.err.log 2>/dev/null || true
           cp /tmp/cloudflared.log /tmp/cloudflared.log.copy 2>/dev/null || true
@@ -534,6 +538,8 @@ jobs:
             /tmp/asr-jobs.json
             /tmp/asr-jobs-final.json
             /tmp/asr-jobs-asmr.json
+            /tmp/asr-stats.json
+            /tmp/asr-traces.json
             /tmp/sample-ja.srt
             /tmp/sample-ja-async.srt
             /tmp/sample-ja-asmr.srt
