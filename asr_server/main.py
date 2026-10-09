@@ -206,8 +206,15 @@ def home() -> str:
 
 @app.get("/health")
 def health() -> dict:
+    # worker 线程死掉后队列会永久停摆，而进程照常响应——必须在这里暴露出来，
+    # 否则只能等客户端轮询超时才发现。
+    worker_alive = job_queue.worker_alive() if job_queue is not None else True
+    output_dir_writable = (
+        settings.output_dir.is_dir() and os.access(settings.output_dir, os.W_OK)
+    )
     return {
-        "ok": True,
+        "ok": worker_alive and output_dir_writable,
+        "worker_alive": worker_alive,
         "version": __version__,
         "backend": settings.backend,
         "model_path": settings.model_path,
@@ -221,7 +228,7 @@ def health() -> dict:
         "asmr_vad_model_path": settings.asmr_vad_model_path,
         "input_dir": str(settings.input_dir),
         "output_dir": str(settings.output_dir),
-        "output_dir_writable": settings.output_dir.exists() and settings.output_dir.is_dir(),
+        "output_dir_writable": output_dir_writable,
     }
 
 

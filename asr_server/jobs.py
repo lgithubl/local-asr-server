@@ -104,35 +104,53 @@ class JobQueue:
             "doing_count": 1 if doing else 0,
         }
 
+    def worker_alive(self) -> bool:
+        thread = self._thread
+        return bool(thread is not None and thread.is_alive())
+
     def _run(self) -> None:
         while True:
             job = self._queue.get()
             if job is None:
                 return
-            with self._lock:
-                self._pending = [pending for pending in self._pending if pending.job_id != job.job_id]
-                job.status = "doing"
-                job.started_at = time.time()
-                self._doing = job
-            if self.start_callback is not None:
-                self.start_callback(job)
+            # 任何意外都不能让这个线程退出：它一死队列就永久停摆，
+            # 而进程还活着、/health 仍报 ok，外部完全看不出来。
             try:
-                self.handler(job)
-                if self.success_callback is not None:
-                    self.success_callback(job)
-            except Exception as exc:
-                if self.error_callback is not None:
-                    self.error_callback(job, exc)
-                self.error_writer(job, exc)
+                self._process(job)
+            except Exception:
+                traceback.print_exc()
             finally:
-                with self._lock:
-                    if self._doing and self._doing.job_id == job.job_id:
-                        self._doing = None
-                    became_idle = self._doing is None and not self._pending
-                self._queue.task_done()
-                if became_idle and self.idle_callback is not None:
-                    self.idle_callback()
+                try:
+                    self._finish(job)
+                except Exception:
+                    traceback.print_exc()
 
+    def _process(self, job: SubtitleJob) -> None:
+        with self._lock:
+            self._pending = [pending for pending in self._pending if pending.job_id != job.job_id]
+            job.status = "doing"
+            job.started_at = time.time()
+            self._doing = job
+        if self.start_callback is not None:
+            self.start_callback(job)
+        try:
+            self.handler(job)
+            if self.success_callback is not None:
+                self.success_callback(job)
+        except Exception as exc:
+            if self.error_callback is not None:
+                self.error_callback(job, exc)
+            # 写 .err.log 可能因磁盘满/目录消失再次抛错，交给 _run 兜底
+            self.error_writer(job, exc)
+
+    def _finish(self, job: SubtitleJob) -> None:
+        with self._lock:
+            if self._doing and self._doing.job_id == job.job_id:
+                self._doing = None
+            became_idle = self._doing is None and not self._pending
+        self._queue.task_done()
+        if became_idle and self.idle_callback is not None:
+            self.idle_callback()
 
 def new_job_id() -> str:
     return uuid.uuid4().hex
